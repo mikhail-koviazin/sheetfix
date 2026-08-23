@@ -75,7 +75,15 @@
 </main>
 
 <script>
-const EMU_PT = 12700, EMU_PX = 9525, DEFAULT_MDW = 8;
+const EMU_PT = 12700, EMU_PX = 9525, MDW = 8;
+
+// The viewer draws the sheet grid shifted to the right of where Excel computes it, while
+// the picture layer is drawn unshifted, so pictures land to the left of their cell by a
+// constant amount. Measured on 2026-08-24 from three iPhone screenshots, one of them a
+// file whose coordinates Excel itself had written: 12 sheet pixels, about 27 screen
+// pixels, the same in all three and independent of the workbook font. Vertically there is
+// no shift. Excel never reads a:off, so correcting for one viewer costs nothing anywhere.
+const GRID_OFFSET_EMU = 12 * EMU_PX;
 
 /* ---------- zip ---------- */
 
@@ -227,14 +235,16 @@ function sheetGeometry(xml) {
   return { defW, defH, widths, heights };
 }
 
-// Excel turns a column width in characters into pixels through the width of a
-// digit in the workbook font (MDW). The usual value is 7, but Excel for Mac
-// writes files that only line up with 8, so the value is calibrated per file.
-const colPx = (width, mdw) => Math.trunc(((256 * width + Math.trunc(128 / mdw)) / 256) * mdw);
+// Excel turns a column width in characters into pixels through the width of a digit in
+// the workbook font (MDW). The usual value is 7, but the viewer we are correcting for
+// ignores the workbook font and lays the grid out with 8: files with Calibri 11 and with
+// Aptos Narrow 12 come out with pixel identical column lines. So this is fixed, not
+// calibrated per file; calibrating also broke on files this page had already fixed.
+const colPx = (width) => Math.trunc(((256 * width + Math.trunc(128 / MDW)) / 256) * MDW);
 
-function xOf(geo, col0, off, mdw) {
+function xOf(geo, col0, off) {
   let px = 0;
-  for (let i = 0; i < col0; i++) px += colPx(geo.widths.get(i + 1) ?? geo.defW, mdw);
+  for (let i = 0; i < col0; i++) px += colPx(geo.widths.get(i + 1) ?? geo.defW);
   return px * EMU_PX + off;
 }
 
@@ -259,44 +269,29 @@ function corners(anchor, prefix) {
   return { from: f.slice(1, 5).map(Number), to: t.slice(1, 5).map(Number) };
 }
 
-// Coordinates Excel wrote itself are the only reference for MDW, so when they
-// are present the file tells us which value it was written with.
-function calibrate(anchors, prefix, geo) {
-  let best = null;
-  for (const a of anchors) {
-    const c = corners(a, prefix);
-    const off = /<a:off x="(-?\d+)"/.exec(a);
-    if (!c || !off || c.from[0] === 0) continue;
-    const base = +off[1] - c.from[1];
-    for (const mdw of [7, 8, 9, 10, 11, 12]) {
-      const err = Math.abs(xOf(geo, c.from[0], 0, mdw) - base);
-      if (!best || err < best.err) best = { mdw, err };
-    }
-  }
-  return best && best.err < 3 * EMU_PT ? best.mdw : null;
-}
-
 function processDrawing(xml, geo) {
   const p = xml.includes('<xdr:wsDr') ? 'xdr:' : '';
   const anchorRe = new RegExp(`<${p}twoCellAnchor[^>]*>[\\s\\S]*?</${p}twoCellAnchor>`, 'g');
   const anchors = xml.match(anchorRe) || [];
   const other = (xml.match(new RegExp(`<${p}oneCellAnchor`, 'g')) || []).length +
                 (xml.match(new RegExp(`<${p}absoluteAnchor`, 'g')) || []).length;
-  const mdw = calibrate(anchors, p, geo) ?? DEFAULT_MDW;
-  const stat = { total: 0, missing: 0, stale: 0, worst: 0, other, mdw };
+  const stat = { total: 0, missing: 0, stale: 0, worst: 0, other };
 
   const out = xml.replace(anchorRe, (anchor) => {
     const c = corners(anchor, p);
     if (!c) return anchor;
     stat.total++;
-    const x = xOf(geo, c.from[0], c.from[1], mdw);
+    const x0 = xOf(geo, c.from[0], c.from[1]);
+    const x = x0 + GRID_OFFSET_EMU;
     const y = yOf(geo, c.from[2], c.from[3]);
-    const cx = Math.max(xOf(geo, c.to[0], c.to[1], mdw) - x, 1);
+    const cx = Math.max(xOf(geo, c.to[0], c.to[1]) - x0, 1);
     const cy = Math.max(yOf(geo, c.to[2], c.to[3]) - y, 1);
     const had = /<a:off x="(-?\d+)" y="(-?\d+)"\/>/.exec(anchor);
     if (!had) {
       stat.missing++;
     } else {
+      // Judged on Y: it depends neither on the column width model nor on the grid
+      // offset, so a mismatch there is genuinely a stale coordinate.
       const delta = Math.abs(+had[2] - y) / EMU_PT;
       if (delta > stat.worst) stat.worst = delta;
       if (delta > 5) stat.stale++;
@@ -334,7 +329,7 @@ async function repair(buffer) {
   }
 
   const patched = new Map();
-  const totals = { total: 0, missing: 0, stale: 0, worst: 0, other: 0, mdw: DEFAULT_MDW };
+  const totals = { total: 0, missing: 0, stale: 0, worst: 0, other: 0 };
   for (const d of drawings) {
     const sheet = sheetFor.get(d.name);
     if (!sheet) continue;
@@ -346,7 +341,6 @@ async function repair(buffer) {
     totals.stale += stat.stale;
     totals.other += stat.other;
     totals.worst = Math.max(totals.worst, stat.worst);
-    totals.mdw = stat.mdw;
   }
   if (!totals.total) return { stat: totals };
 
@@ -386,8 +380,7 @@ function fixedName(name) {
 function summary(stat) {
   if (stat.missing && stat.stale) return `${stat.total} pictures: ${stat.missing} had no coordinates, ${stat.stale} were out of date by up to ${Math.round(stat.worst)} pt.`;
   if (stat.missing) return `${stat.total} pictures had no absolute coordinates at all, which is why WeChat showed none of them.`;
-  if (stat.stale) return `${stat.stale} of ${stat.total} pictures were out of date by up to ${Math.round(stat.worst)} pt, so WeChat drew them below the table.`;
-  return `${stat.total} pictures were already positioned correctly, and the copy carries the same coordinates.`;
+  return `${stat.stale} of ${stat.total} pictures were out of date by up to ${Math.round(stat.worst)} pt, so WeChat drew them below the table.`;
 }
 
 async function handle(file) {
@@ -401,6 +394,14 @@ async function handle(file) {
     const { stat, blob } = await repair(await file.arrayBuffer());
     if (!stat || !stat.total) {
       say('No pictures found in this file, so there is nothing to fix.', 'bad');
+      return;
+    }
+    // A file that is already correct is left alone rather than handed back rewritten:
+    // its author may have placed the pictures deliberately, and this page only knows
+    // how to reproduce the anchors, not the intent behind them.
+    if (!stat.missing && !stat.stale) {
+      say(`Nothing to fix: all ${stat.total} pictures already carry correct coordinates. `
+        + 'If they still do not show up, the problem is somewhere else.', 'busy');
       return;
     }
     const url = URL.createObjectURL(blob);

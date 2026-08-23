@@ -61,3 +61,13 @@ handed a link and asked to feed a business document to it should be able to read
 whole thing, and a tool with no build and no dependencies still works years later when
 nobody has looked at it. Adding a bundler, a framework or an npm package needs an entry
 in this file first.
+
+## 2026-08-24: target the viewer's layout, not Excel's
+
+The first version simply mirrored the anchor into `a:off` and calibrated the column width model against whatever Excel had written into that particular file. Measurements taken from iPhone screenshots showed that this is the wrong target. The viewer lays columns out with its own model and ignores the workbook font, and it draws the grid about 12 sheet pixels to the right of the picture layer. That is why pictures looked shifted left even in a file whose coordinates Excel itself had written.
+
+So the model is now fixed at MDW=8 and a constant offset is added. This is deliberately a choice in favour of one reader, and the justification is that `a:off` has no other reader: Excel ignores it, and so do LibreOffice and Google Sheets, which all draw from the anchor. The field was dead weight until it turned out that one viewer reads nothing else. Storing a copy of the anchor in it helps nobody; making it correct for the only program that looks at it helps.
+
+Calibrating MDW per file is tempting and wrong for the same reason. It reproduces Excel's model rather than the viewer's, and on a file this page had already corrected the calibration tripped over the grid offset, so a second pass degraded the file.
+
+A file whose coordinates are already correct is now returned untouched. The page can reproduce anchors but not intent, and a generator that positioned its pictures for this viewer on purpose would otherwise have that undone.
