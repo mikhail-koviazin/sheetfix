@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sheetfix</title>
+<meta name="description" content="Photos missing when an Excel file is opened in WeChat. Fixes the file in your browser, nothing is uploaded.">
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fff;
+    --fg: #1a1a1a;
+    --muted: #6b6b6b;
+    --line: #d8d8d8;
+    --accent: #1a1a1a;
+    --ok: #157347;
+    --bad: #a12b2b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#161616; --fg:#e8e8e8; --muted:#9a9a9a; --line:#3a3a3a; --accent:#e8e8e8; --ok:#5bbf85; --bad:#e08585; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    padding: 8vh 20px 40px;
+  }
+  main { width: 100%; max-width: 33rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 .35rem; letter-spacing: -.01em; }
+  .lede { margin: 0 0 1.75rem; color: var(--muted); }
+  #drop {
+    border: 1px dashed var(--line);
+    border-radius: 10px;
+    padding: 2.25rem 1.25rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .12s, background .12s;
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); }
+  #drop.over { background: color-mix(in srgb, var(--fg) 5%, transparent); }
+  #drop p { margin: 0; }
+  #drop .hint { color: var(--muted); font-size: .875rem; margin-top: .4rem; }
+  input[type=file] { display: none; }
+  #out { margin-top: 1.25rem; font-size: .95rem; white-space: pre-line; }
+  #out.ok { color: var(--ok); }
+  #out.bad { color: var(--bad); }
+  #out.busy { color: var(--muted); }
+  .note { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid var(--line); color: var(--muted); font-size: .875rem; }
+  .note p { margin: 0 0 .7rem; }
+  .note p:last-child { margin-bottom: 0; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <h1>sheetfix</h1>
+  <p class="lede">Photos in an Excel file are invisible when it is opened in WeChat on an iPhone. Drop the file here to get a fixed copy.</p>
+
+  <div id="drop" tabindex="0" role="button" aria-label="Choose an .xlsx file">
+    <p><strong>Drop an .xlsx file</strong></p>
+    <p class="hint">or click to choose one</p>
+  </div>
+  <input type="file" id="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+
+  <div id="out" aria-live="polite"></div>
+
+  <div class="note">
+    <p><strong>Nothing is uploaded.</strong> The file is opened, repaired and saved by this page inside your browser. There is no server behind it, no account and no storage: close the tab and nothing of it remains.</p>
+    <p>A picture in an .xlsx file carries its position twice: anchored to a cell, and as absolute coordinates. Excel reads the anchor and ignores the rest, so on a computer the file always looks right. WeChat on iOS reads only the absolute coordinates, which Excel does not always keep up to date and some tools never write at all. Then the pictures land far below the table, or are not drawn. This page recomputes the absolute coordinates from the anchors. Excel does not read them, so the fixed file stays identical everywhere else.</p>
+  </div>
+</main>
+
+<script>
+const EMU_PT = 12700, EMU_PX = 9525, DEFAULT_MDW = 8;
+
+/* ---------- zip ---------- */
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+function readZip(buf) {
+  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+  let eocd = -1;
+  const floor = Math.max(0, buf.length - 22 - 65535);
+  for (let i = buf.length - 22; i >= floor; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('This is not an .xlsx file.');
+  const count = dv.getUint16(eocd + 10, true);
+  let off = dv.getUint32(eocd + 16, true);
+  const decoder = new TextDecoder();
+  const entries = [];
+  for (let i = 0; i < count; i++) {
+    if (dv.getUint32(off, true) !== 0x02014b50) throw new Error('The file is damaged.');
+    const nameLen = dv.getUint16(off + 28, true);
+    const extraLen = dv.getUint16(off + 30, true);
+    const commentLen = dv.getUint16(off + 32, true);
+    const e = {
+      flags:  dv.getUint16(off + 8, true),
+      method: dv.getUint16(off + 10, true),
+      time:   dv.getUint16(off + 12, true),
+      date:   dv.getUint16(off + 14, true),
+      crc:    dv.getUint32(off + 16, true),
+      csize:  dv.getUint32(off + 20, true),
+      usize:  dv.getUint32(off + 24, true),
+      local:  dv.getUint32(off + 42, true),
+      nameBytes: buf.slice(off + 46, off + 46 + nameLen),
+    };
+    e.name = decoder.decode(e.nameBytes);
+    entries.push(e);
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  for (const e of entries) {
+    const nl = dv.getUint16(e.local + 26, true);
+    const el = dv.getUint16(e.local + 28, true);
+    const start = e.local + 30 + nl + el;
+    e.raw = buf.subarray(start, start + e.csize);
+  }
+  return entries;
+}
+
+async function inflate(entry) {
+  if (entry.method === 0) return entry.raw;
+  const stream = new Blob([entry.raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function deflate(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate-raw'));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function writeZip(items) {
+  const parts = [], central = [];
+  let offset = 0;
+  for (const it of items) {
+    const nameLen = it.nameBytes.length;
+    const lh = new Uint8Array(30 + nameLen);
+    const lv = new DataView(lh.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, it.flags & ~0x08, true);
+    lv.setUint16(8, it.method, true);
+    lv.setUint16(10, it.time, true);
+    lv.setUint16(12, it.date, true);
+    lv.setUint32(14, it.crc, true);
+    lv.setUint32(18, it.data.length, true);
+    lv.setUint32(22, it.usize, true);
+    lv.setUint16(26, nameLen, true);
+    lh.set(it.nameBytes, 30);
+    parts.push(lh, it.data);
+
+    const ch = new Uint8Array(46 + nameLen);
+    const cv = new DataView(ch.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, it.flags & ~0x08, true);
+    cv.setUint16(10, it.method, true);
+    cv.setUint16(12, it.time, true);
+    cv.setUint16(14, it.date, true);
+    cv.setUint32(16, it.crc, true);
+    cv.setUint32(20, it.data.length, true);
+    cv.setUint32(24, it.usize, true);
+    cv.setUint16(28, nameLen, true);
+    cv.setUint32(42, offset, true);
+    ch.set(it.nameBytes, 46);
+    central.push(ch);
+
+    offset += lh.length + it.data.length;
+  }
+  let cdSize = 0;
+  for (const c of central) cdSize += c.length;
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(8, central.length, true);
+  ev.setUint16(10, central.length, true);
+  ev.setUint32(12, cdSize, true);
+  ev.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, eocd],
+    { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+/* ---------- sheet geometry ---------- */
+
+function numberIn(xml, re, fallback) {
+  const m = re.exec(xml);
+  return m ? parseFloat(m[1]) : fallback;
+}
+
+function sheetGeometry(xml) {
+  const defW = numberIn(xml, /defaultColWidth="([\d.]+)"/, 8.43);
+  const defH = numberIn(xml, /defaultRowHeight="([\d.]+)"/, 15);
+  const widths = new Map();
+  for (const m of xml.matchAll(/<col ([^>]*?)\/>/g)) {
+    const a = m[1];
+    const lo = /min="(\d+)"/.exec(a), hi = /max="(\d+)"/.exec(a), w = /width="([\d.]+)"/.exec(a);
+    if (!lo || !hi || !w) continue;
+    for (let i = +lo[1]; i <= +hi[1]; i++) widths.set(i, parseFloat(w[1]));
+  }
+  const heights = new Map();
+  for (const m of xml.matchAll(/<row([^>]*?)>/g)) {
+    const a = m[1];
+    const r = /r="(\d+)"/.exec(a);
+    if (!r) continue;
+    const h = /ht="([\d.]+)"/.exec(a);
+    heights.set(+r[1], h ? parseFloat(h[1]) : defH);
+  }
+  return { defW, defH, widths, heights };
+}
+
+// Excel turns a column width in characters into pixels through the width of a
+// digit in the workbook font (MDW). The usual value is 7, but Excel for Mac
+// writes files that only line up with 8, so the value is calibrated per file.
+const colPx = (width, mdw) => Math.trunc(((256 * width + Math.trunc(128 / mdw)) / 256) * mdw);
+
+function xOf(geo, col0, off, mdw) {
+  let px = 0;
+  for (let i = 0; i < col0; i++) px += colPx(geo.widths.get(i + 1) ?? geo.defW, mdw);
+  return px * EMU_PX + off;
+}
+
+function yOf(geo, row0, off) {
+  let pt = 0;
+  for (let i = 1; i <= row0; i++) pt += geo.heights.get(i) ?? geo.defH;
+  return Math.trunc(pt * EMU_PT) + off;
+}
+
+/* ---------- drawing ---------- */
+
+function cornerRe(prefix, tag) {
+  const p = prefix;
+  return new RegExp(`<${p}${tag}><${p}col>(\\d+)</${p}col><${p}colOff>(-?\\d+)</${p}colOff>` +
+                    `<${p}row>(\\d+)</${p}row><${p}rowOff>(-?\\d+)</${p}rowOff>`);
+}
+
+function corners(anchor, prefix) {
+  const f = cornerRe(prefix, 'from').exec(anchor);
+  const t = cornerRe(prefix, 'to').exec(anchor);
+  if (!f || !t) return null;
+  return { from: f.slice(1, 5).map(Number), to: t.slice(1, 5).map(Number) };
+}
+
+// Coordinates Excel wrote itself are the only reference for MDW, so when they
+// are present the file tells us which value it was written with.
+function calibrate(anchors, prefix, geo) {
+  let best = null;
+  for (const a of anchors) {
+    const c = corners(a, prefix);
+    const off = /<a:off x="(-?\d+)"/.exec(a);
+    if (!c || !off || c.from[0] === 0) continue;
+    const base = +off[1] - c.from[1];
+    for (const mdw of [7, 8, 9, 10, 11, 12]) {
+      const err = Math.abs(xOf(geo, c.from[0], 0, mdw) - base);
+      if (!best || err < best.err) best = { mdw, err };
+    }
+  }
+  return best && best.err < 3 * EMU_PT ? best.mdw : null;
+}
+
+function processDrawing(xml, geo) {
+  const p = xml.includes('<xdr:wsDr') ? 'xdr:' : '';
+  const anchorRe = new RegExp(`<${p}twoCellAnchor[^>]*>[\\s\\S]*?</${p}twoCellAnchor>`, 'g');
+  const anchors = xml.match(anchorRe) || [];
+  const other = (xml.match(new RegExp(`<${p}oneCellAnchor`, 'g')) || []).length +
+                (xml.match(new RegExp(`<${p}absoluteAnchor`, 'g')) || []).length;
+  const mdw = calibrate(anchors, p, geo) ?? DEFAULT_MDW;
+  const stat = { total: 0, missing: 0, stale: 0, worst: 0, other, mdw };
+
+  const out = xml.replace(anchorRe, (anchor) => {
+    const c = corners(anchor, p);
+    if (!c) return anchor;
+    stat.total++;
+    const x = xOf(geo, c.from[0], c.from[1], mdw);
+    const y = yOf(geo, c.from[2], c.from[3]);
+    const cx = Math.max(xOf(geo, c.to[0], c.to[1], mdw) - x, 1);
+    const cy = Math.max(yOf(geo, c.to[2], c.to[3]) - y, 1);
+    const had = /<a:off x="(-?\d+)" y="(-?\d+)"\/>/.exec(anchor);
+    if (!had) {
+      stat.missing++;
+    } else {
+      const delta = Math.abs(+had[2] - y) / EMU_PT;
+      if (delta > stat.worst) stat.worst = delta;
+      if (delta > 5) stat.stale++;
+    }
+    const xfrm = `<a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`;
+    if (anchor.includes('<a:xfrm>')) return anchor.replace(/<a:xfrm>[\s\S]*?<\/a:xfrm>/, xfrm);
+    if (anchor.includes(`<${p}spPr>`)) return anchor.replace(`<${p}spPr>`, `<${p}spPr>${xfrm}`);
+    if (anchor.includes(`<${p}spPr/>`)) return anchor.replace(`<${p}spPr/>`, `<${p}spPr>${xfrm}</${p}spPr>`);
+    return anchor;
+  });
+  return { xml: out, stat };
+}
+
+/* ---------- the whole file ---------- */
+
+async function repair(buffer) {
+  const entries = readZip(new Uint8Array(buffer));
+  const byName = new Map(entries.map(e => [e.name, e]));
+  const decoder = new TextDecoder();
+  const drawings = entries.filter(e => /^xl\/drawings\/drawing\d+\.xml$/.test(e.name));
+  if (!drawings.length) return { stat: null };
+
+  // Row heights and column widths live on the sheet, so each drawing has to be
+  // matched to the sheet that references it.
+  const sheetFor = new Map();
+  for (const e of entries) {
+    const m = /^xl\/worksheets\/(sheet\d+\.xml)$/.exec(e.name);
+    if (!m) continue;
+    const rels = byName.get(`xl/worksheets/_rels/${m[1]}.rels`);
+    if (!rels) continue;
+    const text = decoder.decode(await inflate(rels));
+    for (const d of drawings) {
+      if (text.includes(d.name.split('/').pop())) sheetFor.set(d.name, e);
+    }
+  }
+
+  const patched = new Map();
+  const totals = { total: 0, missing: 0, stale: 0, worst: 0, other: 0, mdw: DEFAULT_MDW };
+  for (const d of drawings) {
+    const sheet = sheetFor.get(d.name);
+    if (!sheet) continue;
+    const geo = sheetGeometry(decoder.decode(await inflate(sheet)));
+    const { xml, stat } = processDrawing(decoder.decode(await inflate(d)), geo);
+    patched.set(d.name, new TextEncoder().encode(xml));
+    totals.total += stat.total;
+    totals.missing += stat.missing;
+    totals.stale += stat.stale;
+    totals.other += stat.other;
+    totals.worst = Math.max(totals.worst, stat.worst);
+    totals.mdw = stat.mdw;
+  }
+  if (!totals.total) return { stat: totals };
+
+  // Only the drawing parts are rewritten. Every other entry, photos included,
+  // is copied with its bytes still compressed, so size and speed do not depend
+  // on how many megabytes of pictures the file holds.
+  const items = [];
+  for (const e of entries) {
+    const fresh = patched.get(e.name);
+    if (fresh) {
+      items.push({ nameBytes: e.nameBytes, flags: e.flags, method: 8, time: e.time, date: e.date,
+                   crc: crc32(fresh), usize: fresh.length, data: await deflate(fresh) });
+    } else {
+      items.push({ nameBytes: e.nameBytes, flags: e.flags, method: e.method, time: e.time, date: e.date,
+                   crc: e.crc, usize: e.usize, data: e.raw });
+    }
+  }
+  return { stat: totals, blob: writeZip(items) };
+}
+
+/* ---------- page ---------- */
+
+const drop = document.getElementById('drop');
+const picker = document.getElementById('file');
+const out = document.getElementById('out');
+
+function say(text, kind) {
+  out.textContent = text;
+  out.className = kind || '';
+}
+
+function fixedName(name) {
+  const i = name.toLowerCase().lastIndexOf('.xlsx');
+  return (i > 0 ? name.slice(0, i) : name) + ' (fixed).xlsx';
+}
+
+function summary(stat) {
+  if (stat.missing && stat.stale) return `${stat.total} pictures: ${stat.missing} had no coordinates, ${stat.stale} were out of date by up to ${Math.round(stat.worst)} pt.`;
+  if (stat.missing) return `${stat.total} pictures had no absolute coordinates at all, which is why WeChat showed none of them.`;
+  if (stat.stale) return `${stat.stale} of ${stat.total} pictures were out of date by up to ${Math.round(stat.worst)} pt, so WeChat drew them below the table.`;
+  return `${stat.total} pictures were already positioned correctly, and the copy carries the same coordinates.`;
+}
+
+async function handle(file) {
+  if (!file) return;
+  if (!/\.xlsx$/i.test(file.name)) {
+    say('Only .xlsx files. An older .xls has to be saved as .xlsx in Excel first.', 'bad');
+    return;
+  }
+  say('Working...', 'busy');
+  try {
+    const { stat, blob } = await repair(await file.arrayBuffer());
+    if (!stat || !stat.total) {
+      say('No pictures found in this file, so there is nothing to fix.', 'bad');
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fixedName(file.name);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    let text = 'Fixed copy downloaded.\n' + summary(stat);
+    if (stat.other) text += `\n${stat.other} pictures use an anchor type this page does not handle yet and were left as they are.`;
+    say(text, 'ok');
+  } catch (err) {
+    say(String(err.message || err), 'bad');
+  }
+}
+
+drop.addEventListener('click', () => picker.click());
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click(); } });
+picker.addEventListener('change', () => { handle(picker.files[0]); picker.value = ''; });
+for (const type of ['dragenter', 'dragover']) {
+  drop.addEventListener(type, e => { e.preventDefault(); drop.classList.add('over'); });
+}
+for (const type of ['dragleave', 'drop']) {
+  drop.addEventListener(type, e => { e.preventDefault(); drop.classList.remove('over'); });
+}
+drop.addEventListener('drop', e => handle(e.dataTransfer.files[0]));
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => e.preventDefault());
+
+if (!('DecompressionStream' in window)) {
+  say('This browser is too old: it cannot unpack the file. Safari 16.4, Chrome 80 or Firefox 113 and newer will work.', 'bad');
+}
+</script>
+</body>
+</html>

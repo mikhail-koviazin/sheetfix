@@ -1,0 +1,5 @@
+# Cloudflare Pages target. The page is static and has no build step, so the output
+# directory is the source directory: what is in public/ is what is served.
+name = "sheetfix"
+compatibility_date = "2026-08-24"
+pages_build_output_dir = "public"

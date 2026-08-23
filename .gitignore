@@ -1,0 +1,8 @@
+.idea/
+.vscode/
+.claude/settings.local.json
+.env
+node_modules/
+.wrangler/
+*.xlsx
+~$*
