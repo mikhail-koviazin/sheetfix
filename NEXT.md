@@ -2,9 +2,6 @@
 
 Open items only, one line plus a link. Rewritten at session close, not appended to.
 
-- [ ] Point the custom domain: CNAME for `sheetfix` at the registrar, then attach the
-  domain in the Cloudflare Pages project. Until it exists, the `*.pages.dev` address is
-  the only one, and it is not what gets sent to people.
 - [ ] Only `twoCellAnchor` is repaired. Pictures on `oneCellAnchor` or `absoluteAnchor`
   are counted and reported, not touched. No sample file with them has been seen yet.
 - [ ] Horizontal drift: in the WeChat viewer the column grid and the picture layer are
