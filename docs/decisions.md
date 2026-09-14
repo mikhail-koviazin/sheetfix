@@ -71,3 +71,24 @@ So the model is now fixed at MDW=8 and a constant offset is added. This is delib
 Calibrating MDW per file is tempting and wrong for the same reason. It reproduces Excel's model rather than the viewer's, and on a file this page had already corrected the calibration tripped over the grid offset, so a second pass degraded the file.
 
 A file whose coordinates are already correct is now returned untouched. The page can reproduce anchors but not intent, and a generator that positioned its pictures for this viewer on purpose would otherwise have that undone.
+
+## 2026-09-14: center and fit to cell, as a checkbox, not the default
+
+Some catalogs anchor each picture to the cell it belongs in but leave its size and
+position inside that cell to whatever the paste dialog did: too big for the row, too
+small for the column, sitting in a corner. A checkbox reads the picture's own pixel
+width and height straight from its file header, then resizes it to fit inside the box
+its anchor already defines, keeping its proportions, and centers it there.
+
+It stays a checkbox instead of becoming what the plain fix always does. The plain fix
+already leaves a picture alone once its absolute coordinates look correct, on the
+premise that someone may have positioned it on purpose; resizing a picture that was
+already sitting where its author put it would break that premise outright. Center and
+fit is a different, explicit request, so it always runs when asked, even on a picture
+the plain fix would otherwise call already correct.
+
+A row with several pictures side by side (checked against real catalogs, one with four
+product photos sharing a row, another with two) turned out to give each picture its own
+non-overlapping `from`/`to` slot already. Fitting a picture inside its own slot therefore
+needs no logic to keep it from colliding with its neighbours: the file had already drawn
+the boundary.

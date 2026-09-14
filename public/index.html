@@ -45,6 +45,8 @@
   #drop p { margin: 0; }
   #drop .hint { color: var(--muted); font-size: .875rem; margin-top: .4rem; }
   input[type=file] { display: none; }
+  .fitOpt { display: block; margin-top: .9rem; font-size: .875rem; color: var(--muted); cursor: pointer; }
+  .fitOpt input { margin-right: .45rem; vertical-align: -2px; }
   #out { margin-top: 1.25rem; font-size: .95rem; white-space: pre-line; }
   #out.ok { color: var(--ok); }
   #out.bad { color: var(--bad); }
@@ -66,11 +68,14 @@
   </div>
   <input type="file" id="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
 
+  <label class="fitOpt"><input type="checkbox" id="fitCell"> Also center each picture and resize it to fill its cell</label>
+
   <div id="out" aria-live="polite"></div>
 
   <div class="note">
     <p><strong>Nothing is uploaded.</strong> The file is opened, repaired and saved by this page inside your browser. There is no server behind it, no account and no storage: close the tab and nothing of it remains.</p>
     <p>A picture in an .xlsx file carries its position twice: anchored to a cell, and as absolute coordinates. Excel reads the anchor and ignores the rest, so on a computer the file always looks right. WeChat on iOS reads only the absolute coordinates, which Excel does not always keep up to date and some tools never write at all. Then the pictures land far below the table, or are not drawn. This page recomputes the absolute coordinates from the anchors. Excel does not read them, so the fixed file stays identical everywhere else.</p>
+    <p>The center-and-fit option additionally resizes each picture to the cell its anchor already occupies, keeping its own proportions and centering it there. It reads the picture's real pixel size from the file, so nothing is stretched. Turn it on for a catalog whose photos are already anchored one per cell but at whatever size they were pasted at.</p>
   </div>
 </main>
 
@@ -254,6 +259,68 @@ function yOf(geo, row0, off) {
   return Math.trunc(pt * EMU_PT) + off;
 }
 
+/* ---------- picture intrinsic size ---------- */
+
+// Pixel dimensions straight from the file header, so the fit-to-cell mode knows a
+// picture's own aspect ratio without decoding it. PNG, JPEG, GIF and BMP cover what
+// these catalogs actually contain; anything else is left in plain repair mode.
+function imageSizePx(bytes) {
+  if (bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { w: dv.getUint32(16), h: dv.getUint32(20) };
+  }
+  if (bytes.length >= 4 && bytes[0] === 0xff && bytes[1] === 0xd8) {
+    let i = 2;
+    while (i + 9 < bytes.length) {
+      if (bytes[i] !== 0xff) { i++; continue; }
+      const marker = bytes[i + 1];
+      if (marker === 0xd8 || marker === 0xd9) { i += 2; continue; }
+      const len = (bytes[i + 2] << 8) | bytes[i + 3];
+      const isSOF = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      if (isSOF) return { w: (bytes[i + 7] << 8) | bytes[i + 8], h: (bytes[i + 5] << 8) | bytes[i + 6] };
+      i += 2 + len;
+    }
+    return null;
+  }
+  if (bytes.length >= 10 && bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { w: dv.getUint16(6, true), h: dv.getUint16(8, true) };
+  }
+  if (bytes.length >= 26 && bytes[0] === 0x42 && bytes[1] === 0x4d) {
+    const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return { w: dv.getInt32(18, true), h: Math.abs(dv.getInt32(22, true)) };
+  }
+  return null;
+}
+
+// Resolves a relationship Target ("../media/image4.png") against the folder its
+// .rels file lives next to, the way OPC package parts are addressed.
+function resolveZipPath(baseDir, target) {
+  const stack = [];
+  for (const part of (baseDir + '/' + target).split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') stack.pop();
+    else stack.push(part);
+  }
+  return stack.join('/');
+}
+
+async function loadEmbedSizes(byName, drawingName) {
+  const relsName = drawingName.replace(/^(xl\/drawings\/)(.*)$/, '$1_rels/$2.rels');
+  const rels = byName.get(relsName);
+  const sizes = new Map();
+  if (!rels) return sizes;
+  const decoder = new TextDecoder();
+  const text = decoder.decode(await inflate(rels));
+  for (const m of text.matchAll(/<Relationship\s+Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
+    const media = byName.get(resolveZipPath('xl/drawings', m[2]));
+    if (!media) continue;
+    const size = imageSizePx(await inflate(media));
+    if (size && size.w > 0 && size.h > 0) sizes.set(m[1], size);
+  }
+  return sizes;
+}
+
 /* ---------- drawing ---------- */
 
 function cornerRe(prefix, tag) {
@@ -269,13 +336,15 @@ function corners(anchor, prefix) {
   return { from: f.slice(1, 5).map(Number), to: t.slice(1, 5).map(Number) };
 }
 
-function processDrawing(xml, geo) {
+function processDrawing(xml, geo, opts) {
+  const fitCell = !!(opts && opts.fitCell);
+  const embedSizes = (opts && opts.embedSizes) || new Map();
   const p = xml.includes('<xdr:wsDr') ? 'xdr:' : '';
   const anchorRe = new RegExp(`<${p}twoCellAnchor[^>]*>[\\s\\S]*?</${p}twoCellAnchor>`, 'g');
   const anchors = xml.match(anchorRe) || [];
   const other = (xml.match(new RegExp(`<${p}oneCellAnchor`, 'g')) || []).length +
                 (xml.match(new RegExp(`<${p}absoluteAnchor`, 'g')) || []).length;
-  const stat = { total: 0, missing: 0, stale: 0, worst: 0, other };
+  const stat = { total: 0, missing: 0, stale: 0, worst: 0, other, fitted: 0, unfit: 0 };
 
   const out = xml.replace(anchorRe, (anchor) => {
     const c = corners(anchor, p);
@@ -284,8 +353,8 @@ function processDrawing(xml, geo) {
     const x0 = xOf(geo, c.from[0], c.from[1]);
     const x = x0 + GRID_OFFSET_EMU;
     const y = yOf(geo, c.from[2], c.from[3]);
-    const cx = Math.max(xOf(geo, c.to[0], c.to[1]) - x0, 1);
-    const cy = Math.max(yOf(geo, c.to[2], c.to[3]) - y, 1);
+    const cellW = Math.max(xOf(geo, c.to[0], c.to[1]) - x0, 1);
+    const cellH = Math.max(yOf(geo, c.to[2], c.to[3]) - y, 1);
     const had = /<a:off x="(-?\d+)" y="(-?\d+)"\/>/.exec(anchor);
     if (!had) {
       stat.missing++;
@@ -296,7 +365,23 @@ function processDrawing(xml, geo) {
       if (delta > stat.worst) stat.worst = delta;
       if (delta > 5) stat.stale++;
     }
-    const xfrm = `<a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>`;
+    let outX = x, outY = y, outCx = cellW, outCy = cellH;
+    if (fitCell) {
+      const embed = /r:embed="([^"]+)"/.exec(anchor);
+      const size = embed && embedSizes.get(embed[1]);
+      if (size) {
+        const imgW = size.w * EMU_PX, imgH = size.h * EMU_PX;
+        const scale = Math.min(cellW / imgW, cellH / imgH);
+        outCx = Math.max(Math.round(imgW * scale), 1);
+        outCy = Math.max(Math.round(imgH * scale), 1);
+        outX = x + Math.round((cellW - outCx) / 2);
+        outY = y + Math.round((cellH - outCy) / 2);
+        stat.fitted++;
+      } else {
+        stat.unfit++;
+      }
+    }
+    const xfrm = `<a:xfrm><a:off x="${outX}" y="${outY}"/><a:ext cx="${outCx}" cy="${outCy}"/></a:xfrm>`;
     if (anchor.includes('<a:xfrm>')) return anchor.replace(/<a:xfrm>[\s\S]*?<\/a:xfrm>/, xfrm);
     if (anchor.includes(`<${p}spPr>`)) return anchor.replace(`<${p}spPr>`, `<${p}spPr>${xfrm}`);
     if (anchor.includes(`<${p}spPr/>`)) return anchor.replace(`<${p}spPr/>`, `<${p}spPr>${xfrm}</${p}spPr>`);
@@ -307,7 +392,8 @@ function processDrawing(xml, geo) {
 
 /* ---------- the whole file ---------- */
 
-async function repair(buffer) {
+async function repair(buffer, opts) {
+  const fitCell = !!(opts && opts.fitCell);
   const entries = readZip(new Uint8Array(buffer));
   const byName = new Map(entries.map(e => [e.name, e]));
   const decoder = new TextDecoder();
@@ -329,17 +415,20 @@ async function repair(buffer) {
   }
 
   const patched = new Map();
-  const totals = { total: 0, missing: 0, stale: 0, worst: 0, other: 0 };
+  const totals = { total: 0, missing: 0, stale: 0, worst: 0, other: 0, fitted: 0, unfit: 0 };
   for (const d of drawings) {
     const sheet = sheetFor.get(d.name);
     if (!sheet) continue;
     const geo = sheetGeometry(decoder.decode(await inflate(sheet)));
-    const { xml, stat } = processDrawing(decoder.decode(await inflate(d)), geo);
+    const embedSizes = fitCell ? await loadEmbedSizes(byName, d.name) : null;
+    const { xml, stat } = processDrawing(decoder.decode(await inflate(d)), geo, { fitCell, embedSizes });
     patched.set(d.name, new TextEncoder().encode(xml));
     totals.total += stat.total;
     totals.missing += stat.missing;
     totals.stale += stat.stale;
     totals.other += stat.other;
+    totals.fitted += stat.fitted;
+    totals.unfit += stat.unfit;
     totals.worst = Math.max(totals.worst, stat.worst);
   }
   if (!totals.total) return { stat: totals };
@@ -366,6 +455,7 @@ async function repair(buffer) {
 const drop = document.getElementById('drop');
 const picker = document.getElementById('file');
 const out = document.getElementById('out');
+const fitCellBox = document.getElementById('fitCell');
 
 function say(text, kind) {
   out.textContent = text;
@@ -378,6 +468,7 @@ function fixedName(name) {
 }
 
 function summary(stat) {
+  if (!stat.missing && !stat.stale) return `All ${stat.total} pictures already had correct coordinates.`;
   if (stat.missing && stat.stale) return `${stat.total} pictures: ${stat.missing} had no coordinates, ${stat.stale} were out of date by up to ${Math.round(stat.worst)} pt.`;
   if (stat.missing) return `${stat.total} pictures had no absolute coordinates at all, which is why WeChat showed none of them.`;
   return `${stat.stale} of ${stat.total} pictures were out of date by up to ${Math.round(stat.worst)} pt, so WeChat drew them below the table.`;
@@ -389,17 +480,19 @@ async function handle(file) {
     say('Only .xlsx files. An older .xls has to be saved as .xlsx in Excel first.', 'bad');
     return;
   }
+  const fitCell = fitCellBox.checked;
   say('Working...', 'busy');
   try {
-    const { stat, blob } = await repair(await file.arrayBuffer());
+    const { stat, blob } = await repair(await file.arrayBuffer(), { fitCell });
     if (!stat || !stat.total) {
       say('No pictures found in this file, so there is nothing to fix.', 'bad');
       return;
     }
     // A file that is already correct is left alone rather than handed back rewritten:
     // its author may have placed the pictures deliberately, and this page only knows
-    // how to reproduce the anchors, not the intent behind them.
-    if (!stat.missing && !stat.stale) {
+    // how to reproduce the anchors, not the intent behind them. Fitting pictures to
+    // their cell is an explicit request instead, so it always runs.
+    if (!fitCell && !stat.missing && !stat.stale) {
       say(`Nothing to fix: all ${stat.total} pictures already carry correct coordinates. `
         + 'If they still do not show up, the problem is somewhere else.', 'busy');
       return;
@@ -413,6 +506,10 @@ async function handle(file) {
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
     let text = 'Fixed copy downloaded.\n' + summary(stat);
+    if (fitCell) {
+      text += `\n${stat.fitted} of ${stat.total} pictures centered and resized to fit their cell`
+        + (stat.unfit ? `, ${stat.unfit} left as they were (their picture format could not be read).` : '.');
+    }
     if (stat.other) text += `\n${stat.other} pictures use an anchor type this page does not handle yet and were left as they are.`;
     say(text, 'ok');
   } catch (err) {

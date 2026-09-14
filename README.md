@@ -51,6 +51,13 @@ and falls back to 8.
 
 No dependencies, no build step, one HTML file. Read it before you trust it.
 
+## Center and fit to cell
+
+An optional checkbox additionally resizes each picture to the cell its anchor already
+occupies and centers it there, keeping its own proportions. It reads the picture's real
+pixel size from the file, so nothing is stretched. It runs even on a picture the plain
+fix would call already correct, since asking for it is itself the request.
+
 ## Doing it without the page
 
 A Python version of the same fix, with a diagnostic mode that reports what is wrong with
