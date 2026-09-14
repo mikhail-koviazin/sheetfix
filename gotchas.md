@@ -21,3 +21,9 @@ as long as the tool does, which is why it is written here and not in a session n
 - 2026-08-24. The viewer draws the sheet grid about 12 sheet pixels (27 screen pixels) to the right of where Excel computes it, and draws the picture layer without that shift, so pictures sit left of their cell and wide ones spill into the neighbouring column. Measured from three iPhone screenshots, one of them a file whose coordinates Excel itself wrote, so it is a property of the viewer and not an error in the arithmetic.
 - 2026-08-24. The viewer ignores the workbook font when it lays out columns: files with Calibri 11 and with Aptos Narrow 12 produce pixel identical grid lines even though Excel renders those workbooks at different widths. So MDW is fixed at 8 and never calibrated from what Excel wrote. The first version calibrated, and on a file this page had already fixed the calibration tripped over the grid offset and picked MDW=11, which meant a second pass made the file worse.
 - 2026-08-24. A file whose coordinates are already correct is returned untouched rather than rewritten. The page can reproduce the anchors but not the author's intent, and a generator that deliberately positioned its pictures for this viewer would have that work undone.
+- 2026-09-14. A row that visually holds several product photos side by side does not
+  share one anchor between them. Checked against two real catalogs (one with four
+  photos in a row, one with two): each photo already has its own `from`/`to` slot, not
+  overlapping the next one by more than a couple of EMU. So fitting a picture inside its
+  own anchor box needs no logic to avoid colliding with its neighbours; the file already
+  drew that boundary.
