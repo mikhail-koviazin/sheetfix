@@ -92,3 +92,25 @@ product photos sharing a row, another with two) turned out to give each picture 
 non-overlapping `from`/`to` slot already. Fitting a picture inside its own slot therefore
 needs no logic to keep it from colliding with its neighbours: the file had already drawn
 the boundary.
+
+## 2026-09-16: no .xls to .xlsx conversion
+
+Considered adding conversion so a supplier's old `.xls` (BIFF8, Excel 97-2003) could be
+fixed on a phone without resaving it on a computer first. Ruled out.
+
+`.xls` is not xlsx-without-zip, it is a different binary format entirely, so this is not
+a small addition on top of the existing zip/XML code, it is a second file format to
+parse from scratch. The only way to read it without writing a full BIFF8 parser is a
+third-party library, and every one checked drops the one thing this page exists for.
+SheetJS community edition (the only free, no-build, drop-in option) reads and writes
+`.xls`/`.xlsx` cell data but does not read or write embedded pictures at all, that is a
+SheetJS Pro (paid, closed, minified) feature. Searched further for anything that reads
+the MSODRAWING/escher picture records inside a `.xls` file specifically: nothing free
+exists, in JavaScript or in the wider ecosystem (checked the Python side too, same gap).
+
+Writing a from-scratch escher/BLIP parser to pull pictures out of `.xls` and re-anchor
+them into a fresh `.xlsx` is possible in principle, in the same spirit as the anchor fix
+this page already does, but it is a second, much larger reverse-engineering project, not
+an extension of this one. Not worth it for a format that Excel itself will convert on
+`File > Save As` in one click. The page keeps telling the visitor to resave as `.xlsx`
+first.
