@@ -4,6 +4,8 @@ A single static page that repairs .xlsx files whose pictures do not show up in s
 viewers, WeChat on iOS above all. Everything runs in the visitor's browser: the file is
 never uploaded, there is no server, no account and no storage.
 
+**`AGENTS.md` is the only rules file, for every agent.** Claude Code reads it itself when no `CLAUDE.md` exists in the folder or above, so there is no `CLAUDE.md` here. A `CLAUDE.md` mentioned in older docs means this file; new references point to `AGENTS.md`.
+
 ## Origin and boundary
 
 - Spun out of the private repository `china-products-monitoring`, where the bug was
