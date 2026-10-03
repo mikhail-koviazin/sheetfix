@@ -34,9 +34,11 @@ const GRID = 12 * EMU_PX;
 
 const SHEET = '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
   '<sheetFormatPr defaultRowHeight="15"/>' +
-  '<cols><col min="1" max="1" width="10" customWidth="1"/><col min="2" max="2" width="20" customWidth="1"/></cols>' +
+  'COLS' +
   '<sheetData><row r="1" ht="20" customHeight="1"/><row r="2" ht="100" customHeight="1"/></sheetData>' +
   'MERGES<drawing r:id="rId1"/></worksheet>';
+
+const COLS = '<cols><col min="1" max="1" width="10" customWidth="1"/><col min="2" max="2" width="20" customWidth="1"/></cols>';
 
 const rels = (target) => '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
   `<Relationship Id="rId1" Type="x" Target="${target}"/></Relationships>`;
@@ -67,6 +69,40 @@ const drawing = (body, p = 'xdr:') => {
     `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">${body}</${p}wsDr>`;
 };
 
+// The shape openpyxl writes: the default namespace instead of "xdr", the "a" prefix
+// declared on each element that uses it rather than once on the root, and relationship
+// targets as absolute paths with Id as the last attribute.
+const A_NS = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+const openpyxlAnchor = (from, cx, cy) =>
+  `<oneCellAnchor>${corner('', 'from', from)}<ext cx="${cx}" cy="${cy}"/>` +
+  '<pic><nvPicPr><cNvPr id="1" name="Image 1" descr="Picture"/><cNvPicPr/></nvPicPr>' +
+  `<blipFill><a:blip ${A_NS} xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" cstate="print" r:embed="rId1"/>` +
+  `<a:stretch ${A_NS}><a:fillRect/></a:stretch></blipFill><spPr><a:prstGeom ${A_NS} prst="rect"/></spPr></pic><clientData/></oneCellAnchor>`;
+const openpyxlDrawing = (body) =>
+  `<wsDr xmlns="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing">${body}</wsDr>`;
+const OPENPYXL_RELS = '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+  '<Relationship Type="x" Target="/xl/media/image1.png" Id="rId1"/></Relationships>';
+
+// Every prefix an element or an attribute uses has to be declared on that element or on
+// one above it. Node has no XML parser, and this is the one rule the page can break by
+// pasting a:xfrm into a document that it did not write.
+function assertNamespaces(xml) {
+  const stack = [new Set(['xml', 'xmlns'])];
+  for (const m of xml.matchAll(/<(\/?)([\w:.-]+)((?:\s+[\w:.-]+="[^"]*")*)\s*(\/?)>/g)) {
+    const [, close, name, attrs, selfClose] = m;
+    if (close) { stack.pop(); continue; }
+    const scope = new Set(stack.at(-1));
+    const names = [...attrs.matchAll(/([\w:.-]+)=/g)].map(a => a[1]);
+    for (const n of names) if (n.startsWith('xmlns:')) scope.add(n.slice(6));
+    for (const n of [name, ...names]) {
+      const prefix = n.includes(':') ? n.split(':')[0] : null;
+      assert.ok(!prefix || scope.has(prefix), `prefix "${prefix}" is not declared at <${name}>`);
+    }
+    if (!selfClose) stack.push(scope);
+  }
+  assert.equal(stack.length, 1, 'tags are balanced');
+}
+
 function png(w, h) {
   const b = Buffer.alloc(33);
   Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]).copy(b);
@@ -75,13 +111,13 @@ function png(w, h) {
   return new Uint8Array(b);
 }
 
-async function workbook(drawingXml, { image = png(200, 100), merges = '' } = {}) {
+async function workbook(drawingXml, { image = png(200, 100), merges = '', cols = COLS, drawingRels = rels('../media/image1.png') } = {}) {
   const files = {
     '[Content_Types].xml': '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
-    'xl/worksheets/sheet1.xml': SHEET.replace('MERGES', merges),
+    'xl/worksheets/sheet1.xml': SHEET.replace('COLS', cols).replace('MERGES', merges),
     'xl/worksheets/_rels/sheet1.xml.rels': rels('../drawings/drawing1.xml'),
     'xl/drawings/drawing1.xml': drawingXml,
-    'xl/drawings/_rels/drawing1.xml.rels': rels('../media/image1.png'),
+    'xl/drawings/_rels/drawing1.xml.rels': drawingRels,
     'xl/media/image1.png': image,
   };
   const items = Object.entries(files).map(([name, body]) => {
@@ -119,11 +155,12 @@ async function run(drawingXml, opts, bookOpts) {
   const { stat, blob } = await repair(input, opts);
   const output = await blob.arrayBuffer();
   const xml = dec.decode(unzip(output).get('xl/drawings/drawing1.xml').bytes);
+  assertNamespaces(xml);
   return { stat, xml, input, output };
 }
 
 function xfrmOf(xml) {
-  const m = /<a:xfrm><a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/><\/a:xfrm>/.exec(xml);
+  const m = /<a:xfrm[^>]*><a:off x="(-?\d+)" y="(-?\d+)"\/><a:ext cx="(\d+)" cy="(\d+)"\/><\/a:xfrm>/.exec(xml);
   assert.ok(m, 'the picture carries a:xfrm');
   return m.slice(1).map(Number);
 }
@@ -211,6 +248,118 @@ test('fit: a picture whose format cannot be read keeps the plain repair', async 
   const { stat, xml } = await run(drawing(twoCell(B2.from, B2.to)), { fitCell: true }, { image: new Uint8Array(40) });
   assert.deepEqual(xfrmOf(xml), B2_XFRM);
   assert.equal(stat.unfit, 1);
+});
+
+/* ---------- oneCellAnchor ---------- */
+
+test('one-cell anchor: missing coordinates are the corner cell plus the stored size', async () => {
+  const { stat, xml } = await run(drawing(oneCell([1, 9525, 1, 12700], 100000, 200000)));
+  assert.deepEqual(xfrmOf(xml), [COL_A + 9525 + GRID, ROW_1 + 12700, 100000, 200000]);
+  assert.equal(stat.total, 1);
+  assert.equal(stat.missing, 1);
+  assert.equal(stat.other, 0);
+});
+
+test('one-cell anchor: stale coordinates are replaced', async () => {
+  const { stat, xml } = await run(drawing(oneCell([1, 0, 1, 0], 100000, 200000, xfrmXml(0, 9000000, 5, 5))));
+  assert.deepEqual(xfrmOf(xml), [COL_A + GRID, ROW_1, 100000, 200000]);
+  assert.equal(stat.stale, 1);
+});
+
+test('one-cell anchor: a second pass changes nothing', async () => {
+  const first = await run(drawing(oneCell([1, 0, 1, 0], 100000, 200000)));
+  const second = await repair(first.output);
+  assert.equal(second.stat.missing, 0);
+  assert.equal(second.stat.stale, 0);
+  const again = dec.decode(unzip(await second.blob.arrayBuffer()).get('xl/drawings/drawing1.xml').bytes);
+  assert.equal(again, first.xml);
+});
+
+test('one-cell anchor: the anchor itself is not rewritten', async () => {
+  const anchor = oneCell([1, 0, 1, 0], 100000, 200000);
+  const { xml } = await run(drawing(anchor), { fitCell: true });
+  assert.ok(xml.includes(anchor.slice(0, anchor.indexOf('<xdr:pic>'))));
+});
+
+test('one-cell anchor, fit: a corner sticking out by a pixel does not decide the cell', async () => {
+  // The corner sits in A1, one pixel short of B2, and the picture is the size of B2.
+  const from = [0, COL_A - EMU_PX, 0, ROW_1 - EMU_PT];
+  const { stat, xml } = await run(drawing(oneCell(from, COL_B, ROW_2)), { fitCell: true });
+  const cy = COL_B / 2;
+  assert.deepEqual(xfrmOf(xml), [COL_A + GRID, ROW_1 + (ROW_2 - cy) / 2, COL_B, cy]);
+  assert.equal(stat.fitted, 1);
+});
+
+test('one-cell anchor, fit: the cell is chosen by overlap, not by where the middle falls', async () => {
+  // A and C are 160 px, B between them is 16 px. A 200 px picture starting 70 px into A
+  // covers 90 px of A, all of B and 94 px of C: its middle is in B, most of it is in C.
+  const cols = '<cols><col min="1" max="1" width="20"/><col min="2" max="2" width="2"/><col min="3" max="3" width="20"/></cols>';
+  const { xml } = await run(drawing(oneCell([0, 70 * EMU_PX, 1, 0], 200 * EMU_PX, 50 * EMU_PT)), { fitCell: true }, { cols });
+  const cy = 160 * EMU_PX / 2;
+  assert.deepEqual(xfrmOf(xml), [176 * EMU_PX + GRID, ROW_1 + (ROW_2 - cy) / 2, 160 * EMU_PX, cy]);
+});
+
+test('one-cell anchor, fit: a merged block is used whole', async () => {
+  const merges = '<mergeCells count="1"><mergeCell ref="B2:C3"/></mergeCells>';
+  const w = COL_B + COL_DEFAULT, h = ROW_2 + 15 * EMU_PT;
+  const { xml } = await run(drawing(oneCell([1, 0, 1, 0], 100000, 200000)), { fitCell: true }, { merges, image: png(227, 100) });
+  assert.equal(w, 227 * EMU_PX);
+  assert.deepEqual(xfrmOf(xml), [COL_A + GRID, ROW_1 + (h - 100 * EMU_PX) / 2, w, 100 * EMU_PX]);
+});
+
+test('one-cell anchor: without the fit option merged cells change nothing', async () => {
+  const merges = '<mergeCells count="1"><mergeCell ref="B2:C3"/></mergeCells>';
+  const { xml } = await run(drawing(oneCell([1, 0, 1, 0], 100000, 200000)), {}, { merges });
+  assert.deepEqual(xfrmOf(xml), [COL_A + GRID, ROW_1, 100000, 200000]);
+});
+
+/* ---------- files written by openpyxl ---------- */
+
+test('openpyxl: a:xfrm brings its own namespace when the root does not declare it', async () => {
+  const first = await run(openpyxlDrawing(openpyxlAnchor([1, 0, 1, 0], 100000, 200000)));
+  assert.deepEqual(xfrmOf(first.xml), [COL_A + GRID, ROW_1, 100000, 200000]);
+  assert.ok(first.xml.includes(`<spPr><a:xfrm ${A_NS}><a:off `));
+  const second = await repair(first.output);
+  assert.equal(second.stat.missing, 0);
+  const again = dec.decode(unzip(await second.blob.arrayBuffer()).get('xl/drawings/drawing1.xml').bytes);
+  assert.equal(again, first.xml);
+});
+
+test('the namespace is not repeated when the root already declares it', async () => {
+  const { xml } = await run(drawing(twoCell(B2.from, B2.to)));
+  assert.ok(xml.includes('<xdr:spPr><a:xfrm><a:off '));
+});
+
+test('openpyxl: relationships with an absolute target and Id last are followed', async () => {
+  const { stat, xml } = await run(openpyxlDrawing(openpyxlAnchor([1, 0, 1, 0], 100000, 200000)),
+    { fitCell: true }, { drawingRels: OPENPYXL_RELS });
+  const cy = COL_B / 2;
+  assert.equal(stat.fitted, 1);
+  assert.deepEqual(xfrmOf(xml), [COL_A + GRID, ROW_1 + (ROW_2 - cy) / 2, COL_B, cy]);
+});
+
+test('rotation and flips on an existing a:xfrm survive', async () => {
+  const old = '<a:xfrm rot="5400000" flipH="1"><a:off x="0" y="9000000"/><a:ext cx="1" cy="1"/></a:xfrm>';
+  const { xml } = await run(drawing(twoCell(B2.from, B2.to, old)));
+  assert.deepEqual(xfrmOf(xml), B2_XFRM);
+  assert.equal(xml.match(/<a:xfrm/g).length, 1);
+  assert.ok(xml.includes('<a:xfrm rot="5400000" flipH="1"><a:off '));
+});
+
+test('an empty a:xfrm is filled in, not doubled', async () => {
+  const { xml } = await run(drawing(twoCell(B2.from, B2.to, '<a:xfrm/>')));
+  assert.deepEqual(xfrmOf(xml), B2_XFRM);
+  assert.equal(xml.match(/<a:xfrm/g).length, 1);
+});
+
+/* ---------- absoluteAnchor ---------- */
+
+test('absolute anchors are counted and left exactly as they are', async () => {
+  const abs = absolute(1000, 2000, 3000, 4000);
+  const { stat, xml } = await run(drawing(twoCell(B2.from, B2.to) + abs + oneCell([1, 0, 1, 0], 100000, 200000)));
+  assert.equal(stat.total, 2);
+  assert.equal(stat.other, 1);
+  assert.ok(xml.includes(abs));
 });
 
 /* ---------- the zip around it ---------- */

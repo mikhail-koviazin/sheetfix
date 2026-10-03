@@ -75,7 +75,7 @@
   <div class="note">
     <p><strong>Nothing is uploaded.</strong> The file is opened, repaired and saved by this page inside your browser. There is no server behind it, no account and no storage: close the tab and nothing of it remains.</p>
     <p>A picture in an .xlsx file carries its position twice: anchored to a cell, and as absolute coordinates. Excel reads the anchor and ignores the rest, so on a computer the file always looks right. WeChat on iOS reads only the absolute coordinates, which Excel does not always keep up to date and some tools never write at all. Then the pictures land far below the table, or are not drawn. This page recomputes the absolute coordinates from the anchors. Excel does not read them, so the fixed file stays identical everywhere else.</p>
-    <p>The center-and-fit option additionally resizes each picture to the cell its anchor already occupies, keeping its own proportions and centering it there. It reads the picture's real pixel size from the file, so nothing is stretched. Turn it on for a catalog whose photos are already anchored one per cell but at whatever size they were pasted at.</p>
+    <p>The center-and-fit option additionally resizes each picture to the cell its anchor already occupies, keeping its own proportions and centering it there. A picture anchored by one corner only goes to the cell most of it covers, or to the whole merged block that cell belongs to. It reads the picture's real pixel size from the file, so nothing is stretched. Turn it on for a catalog whose photos are already anchored one per cell but at whatever size they were pasted at.</p>
   </div>
 </main>
 
@@ -237,7 +237,18 @@ function sheetGeometry(xml) {
     const h = /ht="([\d.]+)"/.exec(a);
     heights.set(+r[1], h ? parseFloat(h[1]) : defH);
   }
-  return { defW, defH, widths, heights };
+  const merges = [];
+  for (const m of xml.matchAll(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g)) {
+    merges.push({ c0: colIndex(m[1]), r0: +m[2] - 1, c1: colIndex(m[3]), r1: +m[4] - 1 });
+  }
+  return { defW, defH, widths, heights, merges };
+}
+
+// "A" is 0, "Z" is 25, "AA" is 26.
+function colIndex(letters) {
+  let n = 0;
+  for (const ch of letters) n = n * 26 + ch.charCodeAt(0) - 64;
+  return n - 1;
 }
 
 // Excel turns a column width in characters into pixels through the width of a digit in
@@ -257,6 +268,31 @@ function yOf(geo, row0, off) {
   let pt = 0;
   for (let i = 1; i <= row0; i++) pt += geo.heights.get(i) ?? geo.defH;
   return Math.trunc(pt * EMU_PT) + off;
+}
+
+// The column or row a picture mostly lies in: the one sharing the longest stretch with
+// the span lo..hi. Decided by overlap rather than by the corner or the middle, so a corner
+// that sticks out into the neighbour by a pixel does not move the picture there, and a
+// narrow column squeezed between two wide ones does not win by holding the midpoint.
+function mostCovered(edge, first, lo, hi) {
+  let best = first, bestLen = -1;
+  for (let i = first; i < first + 4096 && edge(i) < hi; i++) {
+    const len = Math.min(edge(i + 1), hi) - Math.max(edge(i), lo);
+    if (len > bestLen) { best = i; bestLen = len; }
+  }
+  return best;
+}
+
+// The box a one-cell picture is fitted into: the cell most of it covers, widened to the
+// whole merged block when that cell is part of one.
+function homeBox(geo, from, cx, cy) {
+  const left = xOf(geo, from[0], from[1]), top = yOf(geo, from[2], from[3]);
+  const col = mostCovered(i => xOf(geo, i, 0), from[0], left, left + cx);
+  const row = mostCovered(i => yOf(geo, i, 0), from[2], top, top + cy);
+  const m = geo.merges.find(m => col >= m.c0 && col <= m.c1 && row >= m.r0 && row <= m.r1)
+         || { c0: col, c1: col, r0: row, r1: row };
+  const x0 = xOf(geo, m.c0, 0), y0 = yOf(geo, m.r0, 0);
+  return { x0, y0, w: xOf(geo, m.c1 + 1, 0) - x0, h: yOf(geo, m.r1 + 1, 0) - y0 };
 }
 
 /* ---------- picture intrinsic size ---------- */
@@ -294,10 +330,11 @@ function imageSizePx(bytes) {
 }
 
 // Resolves a relationship Target ("../media/image4.png") against the folder its
-// .rels file lives next to, the way OPC package parts are addressed.
+// .rels file lives next to, the way OPC package parts are addressed. A target that
+// starts with a slash is already a path from the package root.
 function resolveZipPath(baseDir, target) {
   const stack = [];
-  for (const part of (baseDir + '/' + target).split('/')) {
+  for (const part of (target.startsWith('/') ? target : baseDir + '/' + target).split('/')) {
     if (part === '' || part === '.') continue;
     if (part === '..') stack.pop();
     else stack.push(part);
@@ -312,11 +349,14 @@ async function loadEmbedSizes(byName, drawingName) {
   if (!rels) return sizes;
   const decoder = new TextDecoder();
   const text = decoder.decode(await inflate(rels));
-  for (const m of text.matchAll(/<Relationship\s+Id="([^"]+)"[^>]*Target="([^"]+)"/g)) {
-    const media = byName.get(resolveZipPath('xl/drawings', m[2]));
+  // Attribute order is not fixed: Excel writes Id first, openpyxl writes it last.
+  for (const m of text.matchAll(/<Relationship\b[^>]*>/g)) {
+    const id = /\sId="([^"]+)"/.exec(m[0]), target = /\sTarget="([^"]+)"/.exec(m[0]);
+    if (!id || !target) continue;
+    const media = byName.get(resolveZipPath('xl/drawings', target[1]));
     if (!media) continue;
     const size = imageSizePx(await inflate(media));
-    if (size && size.w > 0 && size.h > 0) sizes.set(m[1], size);
+    if (size && size.w > 0 && size.h > 0) sizes.set(id[1], size);
   }
   return sizes;
 }
@@ -329,32 +369,44 @@ function cornerRe(prefix, tag) {
                     `<${p}row>(\\d+)</${p}row><${p}rowOff>(-?\\d+)</${p}rowOff>`);
 }
 
-function corners(anchor, prefix) {
+// What an anchor says about its picture: the corner cell, and the size, which a two-cell
+// anchor gives as a second corner and a one-cell anchor as plain width and height.
+function corners(anchor, prefix, kind) {
   const f = cornerRe(prefix, 'from').exec(anchor);
-  const t = cornerRe(prefix, 'to').exec(anchor);
-  if (!f || !t) return null;
-  return { from: f.slice(1, 5).map(Number), to: t.slice(1, 5).map(Number) };
+  if (!f) return null;
+  const from = f.slice(1, 5).map(Number);
+  if (kind === 'twoCellAnchor') {
+    const t = cornerRe(prefix, 'to').exec(anchor);
+    return t ? { from, to: t.slice(1, 5).map(Number) } : null;
+  }
+  const e = new RegExp(`<${prefix}ext cx="(\\d+)" cy="(\\d+)"`).exec(anchor);
+  return e ? { from, cx: +e[1], cy: +e[2] } : null;
 }
 
 function processDrawing(xml, geo, opts) {
   const fitCell = !!(opts && opts.fitCell);
   const embedSizes = (opts && opts.embedSizes) || new Map();
   const p = xml.includes('<xdr:wsDr') ? 'xdr:' : '';
-  const anchorRe = new RegExp(`<${p}twoCellAnchor[^>]*>[\\s\\S]*?</${p}twoCellAnchor>`, 'g');
-  const anchors = xml.match(anchorRe) || [];
-  const other = (xml.match(new RegExp(`<${p}oneCellAnchor`, 'g')) || []).length +
-                (xml.match(new RegExp(`<${p}absoluteAnchor`, 'g')) || []).length;
+  const anchorRe = new RegExp(`<${p}(twoCellAnchor|oneCellAnchor)\\b[^>]*>[\\s\\S]*?</${p}\\1>`, 'g');
+  // openpyxl declares the "a" prefix on each element that uses it instead of once on the
+  // root. An a:xfrm pasted into such a file has to declare it too, or the XML is no
+  // longer well formed.
+  const aNs = /<[\w:]*wsDr\b[^>]*\sxmlns:a=/.test(xml) ? '' : ' xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"';
+  // An absolute anchor is tied to no cell, and how the viewer treats one has not been
+  // seen on a real file yet, so those are counted and reported, not touched.
+  const other = (xml.match(new RegExp(`<${p}absoluteAnchor`, 'g')) || []).length;
   const stat = { total: 0, missing: 0, stale: 0, worst: 0, other, fitted: 0, unfit: 0 };
 
-  const out = xml.replace(anchorRe, (anchor) => {
-    const c = corners(anchor, p);
+  const out = xml.replace(anchorRe, (anchor, kind) => {
+    const c = corners(anchor, p, kind);
     if (!c) return anchor;
     stat.total++;
     const x0 = xOf(geo, c.from[0], c.from[1]);
-    const x = x0 + GRID_OFFSET_EMU;
     const y = yOf(geo, c.from[2], c.from[3]);
-    const cellW = Math.max(xOf(geo, c.to[0], c.to[1]) - x0, 1);
-    const cellH = Math.max(yOf(geo, c.to[2], c.to[3]) - y, 1);
+    // The picture's own extent, and the box the fit option centers it in. For a two-cell
+    // anchor both are the slot between its corners.
+    const w = c.to ? Math.max(xOf(geo, c.to[0], c.to[1]) - x0, 1) : c.cx;
+    const h = c.to ? Math.max(yOf(geo, c.to[2], c.to[3]) - y, 1) : c.cy;
     const had = /<a:off x="(-?\d+)" y="(-?\d+)"\/>/.exec(anchor);
     if (!had) {
       stat.missing++;
@@ -365,24 +417,28 @@ function processDrawing(xml, geo, opts) {
       if (delta > stat.worst) stat.worst = delta;
       if (delta > 5) stat.stale++;
     }
-    let outX = x, outY = y, outCx = cellW, outCy = cellH;
+    let outX = x0 + GRID_OFFSET_EMU, outY = y, outCx = w, outCy = h;
     if (fitCell) {
       const embed = /r:embed="([^"]+)"/.exec(anchor);
       const size = embed && embedSizes.get(embed[1]);
       if (size) {
+        const box = c.to ? { x0, y0: y, w, h } : homeBox(geo, c.from, c.cx, c.cy);
         const imgW = size.w * EMU_PX, imgH = size.h * EMU_PX;
-        const scale = Math.min(cellW / imgW, cellH / imgH);
+        const scale = Math.min(box.w / imgW, box.h / imgH);
         outCx = Math.max(Math.round(imgW * scale), 1);
         outCy = Math.max(Math.round(imgH * scale), 1);
-        outX = x + Math.round((cellW - outCx) / 2);
-        outY = y + Math.round((cellH - outCy) / 2);
+        outX = box.x0 + GRID_OFFSET_EMU + Math.round((box.w - outCx) / 2);
+        outY = box.y0 + Math.round((box.h - outCy) / 2);
         stat.fitted++;
       } else {
         stat.unfit++;
       }
     }
-    const xfrm = `<a:xfrm><a:off x="${outX}" y="${outY}"/><a:ext cx="${outCx}" cy="${outCy}"/></a:xfrm>`;
-    if (anchor.includes('<a:xfrm>')) return anchor.replace(/<a:xfrm>[\s\S]*?<\/a:xfrm>/, xfrm);
+    const inner = `<a:off x="${outX}" y="${outY}"/><a:ext cx="${outCx}" cy="${outCy}"/></a:xfrm>`;
+    // An existing a:xfrm keeps its attributes: rotation and flips live there.
+    const existing = /<a:xfrm\b([^>]*?)(?:\/>|>[\s\S]*?<\/a:xfrm>)/;
+    if (existing.test(anchor)) return anchor.replace(existing, (m, attrs) => `<a:xfrm${attrs}>${inner}`);
+    const xfrm = `<a:xfrm${aNs}>${inner}`;
     if (anchor.includes(`<${p}spPr>`)) return anchor.replace(`<${p}spPr>`, `<${p}spPr>${xfrm}`);
     if (anchor.includes(`<${p}spPr/>`)) return anchor.replace(`<${p}spPr/>`, `<${p}spPr>${xfrm}</${p}spPr>`);
     return anchor;

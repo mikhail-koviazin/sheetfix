@@ -51,13 +51,17 @@ The viewer also draws its grid about 12 sheet pixels to the right of the picture
 
 A file whose coordinates already agree with its anchors is returned untouched, since its author may have placed the pictures deliberately.
 
+Two kinds of anchor tie a picture to a cell and both are repaired: `twoCellAnchor`, which Excel writes, and `oneCellAnchor`, which openpyxl writes by default. A picture on an `absoluteAnchor` belongs to no cell; those are counted, reported and left as they are.
+
 No dependencies, no build step, one HTML file. Read it before you trust it.
+
+`node --test` runs the page's script against small synthetic workbooks. It needs Node 22 or newer and installs nothing.
 
 ## Center and fit to cell
 
 An optional checkbox additionally resizes each picture to the cell its anchor already
 occupies and centers it there, keeping its own proportions. It reads the picture's real
-pixel size from the file, so nothing is stretched. It runs even on a picture the plain
+pixel size from the file, so nothing is stretched. A picture anchored by one corner only has no cell of its own on record, so it goes to the cell most of it covers, or to the whole merged block that cell belongs to. It runs even on a picture the plain
 fix would call already correct, since asking for it is itself the request.
 
 ## Doing it without the page

@@ -124,3 +124,17 @@ This keeps the one-file constraint intact. The page gains no export, no module b
 Fixtures are synthetic on purpose. Real catalogs carry order data and are ignored by git, so anything a real file teaches goes into a test as the few lines of XML that reproduce it. The output zip is checked with a separate reader written in the test rather than the page's own, so a mistake in the zip code cannot hide behind itself.
 
 What the tests cannot see is the viewer. They pin the arithmetic (which coordinates are written for which anchor) and not whether WeChat on iOS draws the result where expected; that still takes a phone.
+
+## 2026-10-03: one-cell anchors are repaired; fit picks the cell by overlap
+
+`oneCellAnchor` records a corner cell and a width and height, with no second corner. The plain repair needs nothing more: the absolute position is the corner (plus the grid offset) and the size is the one stored.
+
+Center and fit needs a cell to fit into, and a one-cell anchor does not name one. The corner cell is the obvious answer and a fragile one: a picture dragged a pixel up and to the left has its corner in the neighbouring cell while all of it sits in the intended one. So the cell is the column and the row the picture shares the longest stretch with, each axis judged on its own. Overlap was chosen over "where the middle falls" because a narrow column between two wide ones can hold the midpoint of a picture that lies almost entirely in its neighbours.
+
+If that cell belongs to a merged block, the block is the box. A photo placed in a merged area was meant to fill it, and fitting it into the top-left cell of the merge would shrink it for no reason.
+
+A picture that deliberately spans several unmerged cells cannot be told apart from one that was pasted carelessly, and it will be fitted into the single cell it covers most. That is accepted: the option is off by default and asking for it is asking for one picture per cell.
+
+As with two-cell anchors, only `a:xfrm` is written. The anchor is left as it was, so Excel keeps showing the file the way its author saw it.
+
+`absoluteAnchor` stays untouched and reported. It has a position but no cell, the position is in Excel's pixel model and not the viewer's, and no real file with one has been seen, so there is nothing to measure the viewer's behaviour against. Guessing would be writing coordinates nobody has checked into a file that might be fine.
