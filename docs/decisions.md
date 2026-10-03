@@ -114,3 +114,13 @@ this page already does, but it is a second, much larger reverse-engineering proj
 an extension of this one. Not worth it for a format that Excel itself will convert on
 `File > Save As` in one click. The page keeps telling the visitor to resave as `.xlsx`
 first.
+
+## 2026-10-03: tests run the page's script as is, under Node, with nothing installed
+
+Checking the page used to mean dragging real catalogs into a browser and reading the resulting `drawing1.xml` by eye, which nobody repeats after a small change. `tests/repair.test.mjs` now does it mechanically: it pulls the inline script out of `public/index.html`, evaluates it under Node with a stub in place of the document, and feeds it small workbooks built in the test from hand-written XML.
+
+This keeps the one-file constraint intact. The page gains no export, no module boundary and no build step for the tests' sake, and the tests use only what ships with Node (`node:test`, `node:vm`, `node:zlib`), so there is still no `package.json` and nothing to install. The run is `node --test`, locally, before a commit; no CI was added because a workflow file is one more thing to keep alive for a page that changes a few times a year.
+
+Fixtures are synthetic on purpose. Real catalogs carry order data and are ignored by git, so anything a real file teaches goes into a test as the few lines of XML that reproduce it. The output zip is checked with a separate reader written in the test rather than the page's own, so a mistake in the zip code cannot hide behind itself.
+
+What the tests cannot see is the viewer. They pin the arithmetic (which coordinates are written for which anchor) and not whether WeChat on iOS draws the result where expected; that still takes a phone.
