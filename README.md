@@ -45,9 +45,11 @@ width of a digit in the workbook font (MDW):
 px = trunc(((256 * width + trunc(128 / MDW)) / 256) * MDW)
 ```
 
-The common value is 7, but Excel for Mac writes files that only line up with 8. When the
-file already carries coordinates written by Excel, the page calibrates MDW against them
-and falls back to 8.
+Excel takes MDW from the workbook font, usually 7. The WeChat viewer does not: it ignores the font and lays its columns out as if MDW were 8, so the page uses a fixed 8 and never calibrates against coordinates already in the file.
+
+The viewer also draws its grid about 12 sheet pixels to the right of the picture layer, so the page adds that constant to every horizontal coordinate. Both numbers were measured from iPhone screenshots. They favour one reader on purpose: nothing else reads these coordinates.
+
+A file whose coordinates already agree with its anchors is returned untouched, since its author may have placed the pictures deliberately.
 
 No dependencies, no build step, one HTML file. Read it before you trust it.
 

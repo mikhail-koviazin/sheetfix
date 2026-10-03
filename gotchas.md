@@ -9,8 +9,8 @@ as long as the tool does, which is why it is written here and not in a session n
   real file: photos disappeared from a workbook where three of them had been visible.
 - 2026-08-24. Excel for Mac computes column widths with MDW=8, not the usual 7. Summed
   over ten columns, MDW=8 lands within 0.2 pt of the coordinates Excel wrote itself and
-  MDW=7 is off by 110 pt. Calibrate against the file when it already carries
-  coordinates.
+  MDW=7 is off by 110 pt. Do not calibrate against the file's own coordinates, though:
+  the viewer uses 8 whatever the font, see the two entries on the viewer's grid below.
 - 2026-08-24. The same file renders correctly in WeChat on Android and shows no pictures
   on iOS, so "it works on my phone" proves nothing. Tencent's own developer forum has
   reports of iOS previews mangling picture dimensions while Android is fine.
