@@ -28,7 +28,7 @@ const EMU_PX = 9525, EMU_PT = 12700;
 
 // Column A is 10 characters wide and B is 20, which the viewer's model (MDW=8) turns into
 // 80 and 160 px. Rows 1 and 2 are 20 and 100 pt, every other row the default 15.
-const COL_A = 80 * EMU_PX, COL_B = 160 * EMU_PX, COL_DEFAULT = 67 * EMU_PX;
+const COL_A = 80 * EMU_PX, COL_B = 160 * EMU_PX, COL_DEFAULT = 72 * EMU_PX;
 const ROW_1 = 20 * EMU_PT, ROW_2 = 100 * EMU_PT;
 const GRID = 12 * EMU_PX;
 
@@ -228,6 +228,12 @@ test('several pictures each get their own coordinates', async () => {
   assert.deepEqual(all, [[GRID, 0], [COL_A + GRID, ROW_1]]);
 });
 
+test('a stated default column width goes through the same formula as any other', async () => {
+  const cols = '<sheetFormatPr defaultColWidth="10" defaultRowHeight="15"/>';
+  const { xml } = await run(drawing(twoCell([2, 0, 0, 0], [3, 0, 1, 0])), {}, { cols });
+  assert.deepEqual(xfrmOf(xml), [160 * EMU_PX + GRID, 0, 80 * EMU_PX, ROW_1]);
+});
+
 /* ---------- center and fit ---------- */
 
 test('fit: a wide picture fills the width and is centered vertically', async () => {
@@ -302,8 +308,8 @@ test('one-cell anchor, fit: the cell is chosen by overlap, not by where the midd
 test('one-cell anchor, fit: a merged block is used whole', async () => {
   const merges = '<mergeCells count="1"><mergeCell ref="B2:C3"/></mergeCells>';
   const w = COL_B + COL_DEFAULT, h = ROW_2 + 15 * EMU_PT;
-  const { xml } = await run(drawing(oneCell([1, 0, 1, 0], 100000, 200000)), { fitCell: true }, { merges, image: png(227, 100) });
-  assert.equal(w, 227 * EMU_PX);
+  const { xml } = await run(drawing(oneCell([1, 0, 1, 0], 100000, 200000)), { fitCell: true }, { merges, image: png(232, 100) });
+  assert.equal(w, 232 * EMU_PX);
   assert.deepEqual(xfrmOf(xml), [COL_A + GRID, ROW_1 + (h - 100 * EMU_PX) / 2, w, 100 * EMU_PX]);
 });
 

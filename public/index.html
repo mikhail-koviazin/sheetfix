@@ -220,7 +220,12 @@ function numberIn(xml, re, fallback) {
 }
 
 function sheetGeometry(xml) {
-  const defW = numberIn(xml, /defaultColWidth="([\d.]+)"/, 8.43);
+  // Without defaultColWidth a column is baseColWidth digits plus 5 px of padding, rounded
+  // up to a multiple of 8 px. With MDW=8 that is 72 px, which is what the viewer draws
+  // (measured 2026-10-03 on an openpyxl file: 161 screen px at 2.25 per sheet pixel).
+  const stated = numberIn(xml, /defaultColWidth="([\d.]+)"/, null);
+  const defPx = stated !== null ? colPx(stated)
+              : Math.ceil((numberIn(xml, /baseColWidth="(\d+)"/, 8) * MDW + 5) / 8) * 8;
   const defH = numberIn(xml, /defaultRowHeight="([\d.]+)"/, 15);
   const widths = new Map();
   for (const m of xml.matchAll(/<col ([^>]*?)\/>/g)) {
@@ -241,7 +246,7 @@ function sheetGeometry(xml) {
   for (const m of xml.matchAll(/<mergeCell ref="([A-Z]+)(\d+):([A-Z]+)(\d+)"/g)) {
     merges.push({ c0: colIndex(m[1]), r0: +m[2] - 1, c1: colIndex(m[3]), r1: +m[4] - 1 });
   }
-  return { defW, defH, widths, heights, merges };
+  return { defPx, defH, widths, heights, merges };
 }
 
 // "A" is 0, "Z" is 25, "AA" is 26.
@@ -260,7 +265,10 @@ const colPx = (width) => Math.trunc(((256 * width + Math.trunc(128 / MDW)) / 256
 
 function xOf(geo, col0, off) {
   let px = 0;
-  for (let i = 0; i < col0; i++) px += colPx(geo.widths.get(i + 1) ?? geo.defW);
+  for (let i = 0; i < col0; i++) {
+    const w = geo.widths.get(i + 1);
+    px += w === undefined ? geo.defPx : colPx(w);
+  }
   return px * EMU_PX + off;
 }
 
