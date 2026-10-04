@@ -1,6 +1,6 @@
-# Pictures drawn 139 px too high in generated test files
+# Pictures drawn 139 px too high in WeChat on iOS
 
-Open investigation, started 2026-10-03. Not resolved. Read this before touching one-cell anchors or the vertical coordinate.
+Open investigation, started 2026-10-03. Cause narrowed down on 2026-10-04 (see the result below), fix not decided. Read this before touching one-cell anchors or the vertical coordinate.
 
 ## What was seen
 
@@ -37,14 +37,23 @@ If that reading is right, the shift is a property of the viewer and of the phone
 
 What contradicts it: on 2026-08-24 and 2026-09-14 real catalogs were checked on a phone and the vertical position was right with no correction at all (`gotchas.md`, entries of those dates). Either the viewer changed since, or real files differ from the generated ones in something not yet varied.
 
+## Result, 2026-10-04: the viewer changed, not the files
+
+A real catalog repaired by the page on 2026-09-16 was opened on the same iPhone. Its drawing carries exactly the coordinates of the file that was confirmed aligned on a phone on 2026-09-14 (same anchors, same `a:xfrm`, byte for byte in the drawing). Now its pictures sit in the header row instead of the row below it.
+
+Measured on the bottom edge of each picture's own content (the tops are cut off by the top of the page), against the table's top line: 141.1, 140.3 and 141.5 sheet px too high. That is the same shift as in the generated files, within the 2 px by which the viewer's header row differs from the file (it draws a 67.9 pt row 96 px tall instead of 90.5).
+
+So coordinates that were right in September are wrong in October. Nothing in the page or in the files explains it; the viewer, or whatever hosts it, now draws the picture layer about 313 screen px higher relative to the table than it did.
+
+The reading above gains weight: the table is laid out below WeChat's bars and the pictures from the top of the screen, as if the web view started extending under the bars while only the table respects the inset. A matching observation sideways: the table's left line is drawn 24 screen px (about 11 sheet px) from the screen edge, close to the 12 px horizontal grid offset measured in August. Both may be the same effect, an inset applied to the table and not to the pictures. Unconfirmed.
+
 ## Next step
 
-One observation decides between the two. Open in WeChat on the same iPhone a real catalog that the page repaired earlier and that looked right then.
+- Find out what changed between 2026-09-14 and 2026-10-03: a WeChat update, an iOS update, or a display setting on the phone.
+- Open one of the test files on a different iPhone model. If the shift stays 139 sheet px it is a constant the page could compensate; if it changes with the height of the status bar it is tied to the device and no value written into a file can be right everywhere.
+- Then decide: compensate, or wait for the viewer to be fixed. A compensation would put pictures one row low again the day the viewer goes back to its September behaviour, and no other reader would mind either way, since only this viewer reads `a:xfrm`.
 
-- Still right: the cause is in the generated files. Compare a real file's sheet and workbook parts with an openpyxl one (sheetViews, dimension, pageMargins, sheetFormatPr, workbook views) and vary those one at a time, as above.
-- Now shifted too: the viewer changed. Find out whether WeChat or iOS was updated after 2026-09-14 and whether it is the same phone. Then decide what the page can still promise, since a correction that depends on the phone cannot be written into a file.
-
-Until this is settled, one-cell anchor support is committed but must not be deployed as a fix that is known to work.
+The shift applies to every file the same way, so it is no reason to hold back one-cell anchor support specifically: one-cell pictures land exactly as wrong as two-cell ones.
 
 ## How to reproduce
 
