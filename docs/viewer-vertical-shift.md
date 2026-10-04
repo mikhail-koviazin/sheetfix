@@ -1,6 +1,6 @@
 # Pictures drawn 139 px too high in WeChat on iOS
 
-Open investigation, started 2026-10-03. Cause not settled, fix not decided. Read this before touching one-cell anchors or the vertical coordinate.
+Open investigation, started 2026-10-03. Settled on 2026-10-04: the viewer changed (see the last result below). Fix not decided. Read this before touching one-cell anchors or the vertical coordinate.
 
 ## What was seen
 
@@ -51,10 +51,20 @@ That leaves two explanations open: the viewer changed between mid-September and 
 
 The reading above still fits the 139 px case: the table laid out below WeChat's bars and the pictures from the top of the screen. A matching observation sideways: the table's left line is drawn 24 screen px (about 11 sheet px) from the screen edge, close to the 12 px horizontal grid offset measured in August. Both may be the same effect, an inset applied to the table and not to the pictures. Unconfirmed.
 
+## Same file, September against October: the viewer changed
+
+The untouched original of the single-picture catalog (coordinates written by Excel, never run through the page) was opened on the same iPhone on 2026-10-04. Measured on the bottom edge of the picture's own content against the table's top line, the same way for both screenshots:
+
+| Screenshot | Shift up, sheet px |
+|---|---|
+| 2026-09-14 (copy differing only in `a:off x`) | 11.4 |
+| 2026-10-04, original | 142.0 (top edge gives the same 142.0) |
+
+Same file, same phone, same vertical coordinate: 11 px in September, 142 px in October. The viewer, or WeChat or iOS around it, changed in between. The roughly 11 px that remain in September are a separate, older error, of the size of the difference between the header row the viewer draws and the one the file states.
+
 ## Next step
 
-- Open the untouched original of the single-picture catalog checked in September (the one Excel wrote, never run through the page) on the same iPhone today. About 11 px off as in September: the error depends on the file, and the next job is to find what in the file. About 139 px off: the viewer changed.
-- Open one of the test files on a different iPhone model (Mike has one). If the shift stays the same in sheet px it is a constant the page could compensate; if it changes with the height of the status bar it is tied to the device and no value written into a file can be right everywhere.
+- Open the same original on a different iPhone model (Mike has one). If the shift stays about 142 sheet px it is a constant the page could compensate; if it changes with the height of the status bar it is tied to the device and no value written into a file can be right everywhere.
 - What updated between mid-September and October is not known (asked 2026-10-04); WeChat and iOS both update automatically.
 - Then decide: compensate, or wait. A compensation would put pictures one row low the day the viewer behaves differently again, and no other reader would mind either way, since only this viewer reads `a:xfrm`.
 
