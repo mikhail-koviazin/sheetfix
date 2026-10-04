@@ -49,11 +49,11 @@ The reading above gains weight: the table is laid out below WeChat's bars and th
 
 ## Next step
 
-- Find out what changed between 2026-09-14 and 2026-10-03: a WeChat update, an iOS update, or a display setting on the phone.
+- Find out what changed between 2026-09-14 and 2026-10-03: a WeChat update, an iOS update, or a display setting on the phone. Asked on 2026-10-04: not known, both update automatically, so this may stay open.
 - Open one of the test files on a different iPhone model. If the shift stays 139 sheet px it is a constant the page could compensate; if it changes with the height of the status bar it is tied to the device and no value written into a file can be right everywhere.
 - Then decide: compensate, or wait for the viewer to be fixed. A compensation would put pictures one row low again the day the viewer goes back to its September behaviour, and no other reader would mind either way, since only this viewer reads `a:xfrm`.
 
-The shift applies to every file the same way, so it is no reason to hold back one-cell anchor support specifically: one-cell pictures land exactly as wrong as two-cell ones.
+The shift applies to every file the same way, so it is no reason to hold back one-cell anchor support specifically: one-cell pictures land exactly as wrong as two-cell ones. On that basis everything else was deployed on 2026-10-04.
 
 ## How to reproduce
 
