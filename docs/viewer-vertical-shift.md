@@ -62,11 +62,23 @@ The untouched original of the single-picture catalog (coordinates written by Exc
 
 Same file, same phone, same vertical coordinate: 11 px in September, 142 px in October. The viewer, or WeChat or iOS around it, changed in between. The roughly 11 px that remain in September are a separate, older error, of the size of the difference between the header row the viewer draws and the one the file states.
 
+## Compensating: what it would take
+
+Excel, LibreOffice and Google Sheets place pictures from the anchor, the iOS viewer only from `a:xfrm`, so the two can be made right independently: adding the shift to `a:off y` moves the pictures in WeChat and leaves Excel exactly as it was (Excel showed the repaired catalog correctly on 2026-10-04). The open question is not desktop against phone but whether one value is right on every phone and for how long.
+
+Two test copies with 142 px (1352500 EMU) added to every `a:off y` were made on 2026-10-04 and are waiting to be checked: the single-picture catalog (coordinates by Excel) and the four-picture catalog (coordinates by the page). They live outside the repository, since they carry order data; to rebuild them, add the shift to `y` in every `<a:off>` of the drawing and repack.
+
 ## Next step
 
-- Open the same original on a different iPhone model (Mike has one). If the shift stays about 142 sheet px it is a constant the page could compensate; if it changes with the height of the status bar it is tied to the device and no value written into a file can be right everywhere.
-- What updated between mid-September and October is not known (asked 2026-10-04); WeChat and iOS both update automatically.
-- Then decide: compensate, or wait. A compensation would put pictures one row low the day the viewer behaves differently again, and no other reader would mind either way, since only this viewer reads `a:xfrm`.
+Check the compensated copies:
+
+1. This iPhone, WeChat: pictures should sit in their cells. Confirms the value.
+2. A second iPhone model, WeChat (Mike has one): if also right, the shift does not depend on the device and can go into the page; if not, there is no single value.
+3. Excel on the desktop: should look unchanged.
+4. Android WeChat, if a phone is at hand: it is not known whether it reads `a:xfrm` when present. If it does, a compensation would break it there.
+5. Optional: the untouched original in the iPhone Files app. The viewer's fonts and grid look like the system's own document preview; if Files shows the same shift, the change came with iOS rather than WeChat, and Mail and other apps are affected too.
+
+Then decide. If the value holds everywhere, it becomes an opt-in checkbox rather than the default: the day the viewer goes back to its September behaviour, compensated files land one row low. What updated between mid-September and October is not known; WeChat and iOS both update automatically.
 
 The shift applies to every file the same way, so it is no reason to hold back one-cell anchor support specifically: one-cell pictures land exactly as wrong as two-cell ones. On that basis everything else was deployed on 2026-10-04.
 
