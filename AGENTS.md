@@ -35,6 +35,7 @@ never uploaded, there is no server, no account and no storage.
 ```
 public/index.html    the whole tool: markup, styles and logic in one self-contained file
 docs/                knowledge that outlives a session: decisions.md (what was chosen and why)
+tests/               node --test: runs the page's inline script under Node against synthetic workbooks
 gotchas.md           traps of the format and of the browsers, each with a date
 NEXT.md              open items only, one line plus a link, rewritten at session close
 ```
@@ -54,6 +55,8 @@ right. The WeChat viewer on iOS reads only the absolute values. They go stale wh
 are resized after the pictures were placed, and tools like openpyxl never write them at
 all, so the pictures land far below the table or are not drawn.
 
+Two anchor kinds tie a picture to a cell: `twoCellAnchor` (Excel) and `oneCellAnchor` (openpyxl's default). Both are repaired. `absoluteAnchor` is reported and left alone until a real file shows how the viewer treats it.
+
 Two rules follow. Write both positions, always, and keep them in agreement. Never delete
 `a:xfrm`: it is not leftover junk but the second half of the record, and removing it
 takes away the only thing the iOS viewer uses.
@@ -70,6 +73,8 @@ takes away the only thing the iOS viewer uses.
 Cloudflare Pages, output directory `public`, custom domain `sheetfix.koviazin.dev` with
 a CNAME at the registrar, the same shape as `fieldsheet`. The address is what gets sent
 to people, so it does not move without a decision.
+
+The Pages project has no git integration: a push deploys nothing. Deploy by hand with `npx wrangler pages deploy public --project-name sheetfix`, and only after the change has been checked on a phone.
 
 ## Never committed
 
